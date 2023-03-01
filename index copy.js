@@ -2,9 +2,9 @@
 
 const streamToArray = require('stream-to-array');
 
-// const clog = (log) => {
-//   strapi.log.info(JSON.stringify(log));
-// };
+const clog = (log) => {
+  strapi.log.info(JSON.stringify(log));
+};
 
 const baseProvider = {
   extend(obj) {
@@ -18,6 +18,9 @@ const baseProvider = {
   },
 };
 
+// removed reliance on strapi v3 api
+// const { convertToStrapiError } = require('../strapi-plugin-upload/errors')
+
 const wrapFunctionForErrors =
   (fn) =>
   async (...args) => {
@@ -30,13 +33,7 @@ const wrapFunctionForErrors =
     }
   };
 
-const getProviderData = (file, options) => {
-  if (!options.selectProvider || typeof options.selectProvider !== 'function') {
-    const msg = `config must define a selectProvider function`;
-    strapi.log.error(msg);
-    throw new Error(msg);
-  }
-
+const getProviderData = (file, options, providers) => {
   let providerKey;
   try {
     providerKey = options.selectProvider(file);
@@ -46,25 +43,13 @@ const getProviderData = (file, options) => {
     strapi.log.error(err);
     throw new Error(msg);
   }
+  strapi.log.info(providerKey);
+  clog(providers);
+  let providerInstance = providers[providerKey];
+  strapi.log.info(providerInstance.upload);
 
-  if (!options.providers) {
-    const msg = `You must set providers object in providerOptions of config/plugins.js`;
-    strapi.log.error(msg);
-    throw new Error(msg);
-  }
-
-  const p = options.providers[providerKey];
-  if (!p) {
-    const msg = `The upload provider selector with key '${providerKey}' not found`;
-    strapi.log.error(msg);
-    throw new Error(msg);
-  }
-
-  let providerInstance;
-  try {
-    providerInstance = require(`${p.provider}`).init(p.providerOptions);
-  } catch (err) {
-    const msg = `The provider package isn't installed. Please run \`npm install ${p.provider}\``;
+  if (!providerInstance) {
+    const msg = `The upload provider with key '${providerKey}' not found`;
     strapi.log.error(msg);
     throw new Error(msg);
   }
@@ -98,14 +83,47 @@ const getProviderData = (file, options) => {
   return { providerFunctions, providerOptions: p.providerOptions };
 };
 
+const initProviders = (options) => {
+  // check if select Provider function exists
+  if (!options.selectProvider || typeof options.selectProvider !== 'function') {
+    const msg = `config must define a selectProvider function`;
+    strapi.log.error(msg);
+    throw new Error(msg);
+  }
+
+  if (!options.providers) {
+    const msg = `You must set providers object in providerOptions of config/plugins.js`;
+    strapi.log.error(msg);
+    throw new Error(msg);
+  }
+
+  const providerInstances = {};
+
+  for (const [key, p] of Object.entries(options.providers)) {
+    try {
+      providerInstances[key] = require(`${p.provider}`).init(p.providerOptions);
+    } catch (err) {
+      const msg = `The provider package isn't installed. Please run \`npm install ${p.provider}\``;
+      strapi.log.error(msg);
+      throw new Error(msg);
+    }
+  }
+
+  return providerInstances;
+};
+
 module.exports = {
   init(options) {
+    const providers = initProviders(options);
+    strapi.log.info(providers.cloudinary.upload);
+
     return {
       upload(file) {
         try {
           const { providerFunctions, providerOptions } = getProviderData(
             file,
-            options
+            options,
+            providers
           );
           return providerFunctions.upload(file);
         } catch (err) {
@@ -116,7 +134,8 @@ module.exports = {
         try {
           const { providerFunctions, providerOptions } = getProviderData(
             file,
-            options
+            options,
+            providers
           );
           return providerFunctions.uploadStream(file);
         } catch (err) {
@@ -127,7 +146,8 @@ module.exports = {
         try {
           const { providerFunctions, providerOptions } = getProviderData(
             file,
-            options
+            options,
+            providers
           );
           return providerFunctions.delete(file);
         } catch (err) {
